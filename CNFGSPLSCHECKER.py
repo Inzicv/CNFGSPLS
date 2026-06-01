@@ -229,3 +229,63 @@ if spool_file and conf_file:
             st.dataframe(df_i_loc, use_container_width=True)
         else:
             st.success("Toutes les locations configurées sont saines et actives.")
+            
+# ==========================================
+    # 4. GÉNÉRATION DU RAPPORT EXCEL UNIQUE
+    # ==========================================
+    st.markdown("---")
+    st.subheader("📥 Téléchargement du Rapport Global")
+    
+    import io
+
+    # On crée un dictionnaire avec tous nos DataFrames pour automatiser la création des onglets
+    export_data = {}
+    
+    if missing_devs:
+        export_data["DEV Manquants (A Rajouter)"] = pd.DataFrame([{
+            "Device": d, "Processus": prod_devs[d]['proc'], "État Actuel": prod_devs[d]['state']
+        } for d in missing_devs])
+        
+    if missing_prints:
+        export_data["PRINT Manquants (A Rajouter)"] = pd.DataFrame([{
+            "Processus PRINT": p, "État": prod_prints[p]['state'], "PRI": prod_prints[p]['pri'], "CPU/Backup": prod_prints[p]['cpu_backup']
+        } for p in missing_prints])
+        
+    if missing_locs:
+        export_data["LOC Manquantes (A Rajouter)"] = pd.DataFrame([{
+            "Location": l, "Cible Spooler (Prod)": prod_locs[l]
+        } for l in missing_locs])
+        
+    if inactive_devs:
+        export_data["DEV Inactifs (A Demonter)"] = pd.DataFrame([{
+            "Device": d, "Statut en Prod": "❌ Supprimé du Spooler" if d not in prod_devs else "💤 OFFLINE (Inactif)"
+        } for d in inactive_devs])
+        
+    if inactive_prints:
+        export_data["PRINT Inactifs (A Demonter)"] = pd.DataFrame([{
+            "Processus PRINT": p, "Statut": "❌ Non démarré / Absent du Spooler"
+        } for p in inactive_prints])
+        
+    if inactive_locs:
+        export_data["LOC Inactives (A Demonter)"] = pd.DataFrame([{
+            "Location": l, "Cible théorique (Conf)": conf_locs[l], 
+            "Raison de l'inactivité": ("❌ Supprimée de la Prod" if l not in prod_locs else "🗑️ Redirigée vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB" else f"⚠️ Pointe vers un device inexistant ({prod_locs[l]})")
+        } for l in inactive_locs])
+
+    # Si on a de la data à exporter, on génère le fichier Excel en mémoire
+    if export_data:
+        buffer = io.BytesIO()
+        # openpyxl est requis par pandas pour écrire du .xlsx, assure-toi qu'il est dans ton requirements.txt
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            for sheet_name, df in export_data.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        st.download_button(
+            label="📊 Télécharger le Rapport d'Audit Complet (.xlsx)",
+            data=buffer.getvalue(),
+            file_name=f"Audit_Spooler_{spool_file.name.split('.')[0]}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    else:
+        st.info("✅ Rien à exporter ! Les fichiers de prod et de conf sont parfaitement identiques.")
