@@ -8,7 +8,7 @@ import re
 
 def clean_line(line):
     """Supprime les résidus de logs de transfert comme """
-    return re.sub(r'\', '', line).strip()
+    return re.sub(r'\\', '', line).strip()
 
 def parse_spoolcom_log(file_content):
     """Parse un log global SPOOLCOM actif (DEV, PRINT, LOC)"""
