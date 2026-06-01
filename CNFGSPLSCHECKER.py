@@ -8,7 +8,7 @@ import re
 
 def clean_line(line):
     """Supprime les résidus de logs de transfert comme et les backslashs génants"""
-    line = re.sub(r'\', '', line)
+    line = re.sub(r'\\', '', line)
     return line.strip()
 
 def parse_spoolcom_log(file_content):
