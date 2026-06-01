@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import re
 
 # ==========================================
@@ -6,14 +7,12 @@ import re
 # ==========================================
 
 def clean_line(line):
-    """Supprime les résidus de logs de transfert comme """
-    return re.sub(r'\', '', line).strip()
+    """Supprime les résidus de logs de transfert comme et les backslashs génants"""
+    line = re.sub(r'\', '', line)
+    return line.strip()
 
 def parse_spoolcom_log(file_content):
-    """
-    Parse un log global SPOOLCOM (contenant DEV, PRINT et LOC mélangés)
-    Retourne 3 dictionnaires : devs, prints, locs
-    """
+    """Parse un log global SPOOLCOM actif (DEV, PRINT, LOC)"""
     devs = {}
     prints = {}
     locs = {}
@@ -23,7 +22,6 @@ def parse_spoolcom_log(file_content):
     
     for line in lines:
         line_upper = line.upper()
-        # Détection des changements de section dans le fichier de log
         if "DEV" in line_upper and "DEVICE" in line_upper and "STATE" in line_upper:
             current_section = "DEV"
             continue
@@ -61,7 +59,6 @@ def parse_spoolcom_log(file_content):
             if len(parts) >= 4:
                 print_name = parts[0]
                 state = parts[1]
-                # Reconstitution CPU/BACKUP
                 cpu_backup = "".join(parts[2:5]) if len(parts) >= 5 else parts[2]
                 pri = parts[-1]
                 prints[print_name] = {"state": state, "cpu_backup": cpu_backup, "pri": pri}
@@ -81,12 +78,10 @@ def parse_spoolcom_log(file_content):
 # ==========================================
 
 def parse_cnfgspls(file_content):
-    """
-    Parse le fichier de conf d'origine pour lister ce qui est déclaré officiellement
-    """
+    """Parse le fichier de conf d'origine pour lister ce qui est déclaré"""
     conf_devs = set()
     conf_prints = set()
-    conf_locs = {}  # {location: target_dev}
+    conf_locs = {}
     
     lines = file_content.splitlines()
     for line in lines:
@@ -105,7 +100,6 @@ def parse_cnfgspls(file_content):
                 conf_prints.add(match.group(1))
                 
         elif cleaned.startswith("LOC") and "#" in cleaned:
-            # Extraction du type: LOC #NOM ,DEV $CIBLE
             match = re.search(r'LOC\s+(#[A-Z0-9\.\-_]+)\s*,\s*DEV\s+(\$[A-Z0-9#\.]+)', cleaned)
             if match:
                 conf_locs[match.group(1)] = match.group(2)
@@ -116,81 +110,122 @@ def parse_cnfgspls(file_content):
 # 3. INTERFACE DE L'APPLICATION STREAMLIT
 # ==========================================
 
-st.set_page_config(page_title="Tandem Spooler Analyzer", layout="wide")
+st.set_page_config(page_title="Tandem Spooler Auditor", layout="wide")
 
-st.title("🖨️ HP NonStop - Analyseur de Spooler Spoolcom")
-st.markdown("Compare tes logs de production actifs avec ton fichier de configuration globale `CNFGSPLS` sans effort.")
+st.title("📋 Audit Spooler HP NonStop")
+st.markdown("Analyse complète des écarts et mouvements de configuration (Prod vs Fichier de Conf).")
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.subheader("1. Données de Production (Actif)")
-    spool_file = st.file_uploader("Importer le log SPOOLCOM (ISIS ou ATLAS)", type=["log", "txt"])
-
+    spool_file = st.file_uploader("1. Importer le log SPOOLCOM (Existant / Prod)", type=["log", "txt"])
 with col2:
-    st.subheader("2. Référentiel de Configuration")
-    conf_file = st.file_uploader("Importer le fichier CNFGSPLS", type=["log", "txt"])
+    conf_file = st.file_uploader("2. Importer le fichier CNFGSPLS (Théorique)", type=["log", "txt"])
 
 if spool_file and conf_file:
     spool_content = spool_file.read().decode("utf-8")
     conf_content = conf_file.read().decode("utf-8")
     
-    # Extraction des données
     prod_devs, prod_prints, prod_locs = parse_spoolcom_log(spool_content)
     conf_devs, conf_prints, conf_locs = parse_cnfgspls(conf_content)
     
-    st.success("Fichiers chargés et nettoyés avec succès ! Début de l'analyse réglementaire...")
+    st.success("Analyse croisée effectuée !")
     
-    # --- ONGLET 1 : ANALYSE DES DEV ---
-    st.header("🛠️ Analyse des Imprimantes (DEV)")
-    missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
+    # -------------------------------------------------------------------------
+    # PARTIE A : EXISTANTS ABSENTS DE LA CONFIGURATION (À RAJOUTER)
+    # -------------------------------------------------------------------------
+    st.subheader("⚠️ Écart 1 : Éléments EXISTANTS en Prod mais ABSENTS du CNFGSPLS")
     
-    if missing_devs:
-        st.error(f"Il manque {len(missing_devs)} imprimantes dans ton fichier de conf !")
-        dev_code = ""
-        for dev in missing_devs:
-            info = prod_devs[dev]
-            dev_code += f"DEV {dev} ,PROCESS {info['proc']} ,SPEED 100,WIDTH -1 ,RESTART 120,HEADER OFF,FIFO ON\n"
-            dev_code += f"DEV {dev} ,PARM 1024,RETRY 10 ,TIMEOUT 360 ,LUEOLVALUE CRLF\n"
-            dev_code += f"DEV {dev} ,DEVRESET ON ,STARTFF OFF,ENDFF ON ,EXCLUSIVE OFF,DEVTYPE\n\n"
-        st.text_area("Lignes TACL à rajouter dans ton CNFGSPLS :", value=dev_code, height=250)
-    else:
-        st.success("Toutes les imprimantes actives sont bien déclarées dans la conf !")
-
-    # --- ONGLET 2 : ANALYSE DES LOC ---
-    st.header("📍 Analyse des Locations (LOC)")
-    missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
-    incoherent_locs = sorted([l for l in prod_locs if l in conf_locs and prod_locs[l] != conf_locs[l]])
+    tab_dev_missing, tab_print_missing, tab_loc_missing = st.tabs([
+        "🛒 DEV Existants Absent de Conf", 
+        "⚙️ PRINT Existants Absent de Conf", 
+        "📍 LOC Existantes Absent de Conf"
+    ])
     
-    tab_missing, tab_incoherent = st.tabs(["Locations Manquantes", "Incohérences de Cibles"])
-    
-    with tab_missing:
-        if missing_locs:
-            st.warning(f"{len(missing_locs)} locations sont actives en prod mais absentes de ta conf.")
-            loc_code = ""
-            for loc in missing_locs:
-                loc_code += f"LOC {loc:<20} ,DEV    {prod_locs[loc]}\n"
-            st.text_area("Lignes LOC à coller dans ton CNFGSPLS :", value=loc_code, height=200)
+    with tab_dev_missing:
+        missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
+        if missing_devs:
+            df_m_dev = pd.DataFrame([{
+                "Device": d, "Processus": prod_devs[d]['proc'], "État Actuel": prod_devs[d]['state']
+            } for d in missing_devs])
+            st.dataframe(df_m_dev, use_container_width=True)
         else:
-            st.success("Aucune location manquante.")
+            st.success("Aucun périphérique existant n'est absent de la conf.")
             
-    with tab_incoherent:
-        if incoherent_locs:
-            st.error("🚨 ATTENTION : Ces locations existent des deux côtés mais ne pointent pas vers le même device !")
-            for loc in incoherent_locs:
-                st.write(f"• **{loc}** : Pointe vers `{prod_locs[loc]}` en Prod ➡️ mais configurée vers `{conf_locs[loc]}` dans ton fichier.")
+    with tab_print_missing:
+        missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
+        if missing_prints:
+            df_m_print = pd.DataFrame([{
+                "Processus PRINT": p, "État": prod_prints[p]['state'], "PRI": prod_prints[p]['pri'], "CPU/Backup": prod_prints[p]['cpu_backup']
+            } for p in missing_prints])
+            st.dataframe(df_m_print, use_container_width=True)
         else:
-            st.success("Aucune incohérence de routage détectée.")
+            st.success("Aucun processus d'impression existant n'est absent de la conf.")
+            
+    with tab_loc_missing:
+        missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
+        if missing_locs:
+            df_m_loc = pd.DataFrame([{
+                "Location": l, "Cible Spooler (Prod)": prod_locs[l]
+            } for l in missing_locs])
+            st.dataframe(df_m_loc, use_container_width=True)
+        else:
+            st.success("Aucune location existante n'est absente de la conf.")
 
-    # --- ONGLET 3 : ANALYSE DES PRINT ---
-    st.header("⚙️ Analyse des Processus (PRINT)")
-    missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
+    st.markdown("---")
+
+    # -------------------------------------------------------------------------
+    # PARTIE B : DÉCLARÉS DANS LA CONFIGURATION MAIS INACTIFS/ABSENTS EN PROD
+    # -------------------------------------------------------------------------
+    st.subheader("🧹 Écart 2 : Éléments CONFIGURÉS mais ABSENTS ou INACTIFS en Prod (À démonter)")
     
-    if missing_prints:
-        st.warning(f"Il manque {len(missing_prints)} processus PRINT dans ta conf.")
-        print_code = ""
-        for prt in missing_prints:
-            print_code += f"PRINT {prt}, FILE $SYSEXP.OPRPRINT.OPRINTCN\nPRINT {prt}, PRI 145, BACKUP 1\nPRINT {prt}, CPU 2\n\n"
-        st.text_area("Lignes PRINT à rajouter :", value=print_code, height=180)
-    else:
-        st.success("Tous les processus d'impression sont bien configurés.")
+    tab_dev_inactive, tab_print_inactive, tab_loc_inactive = st.tabs([
+        "💤 DEV Inactifs / Absents", 
+        "💤 PRINT Inactifs / Absents", 
+        "💤 LOC Inactives / Absentes"
+    ])
+    
+    with tab_dev_inactive:
+        # Un DEV est considéré inactif s'il n'est plus dans le spooler OU s'il est OFFLINE
+        inactive_devs = sorted([
+            d for d in conf_devs 
+            if d not in prod_devs or prod_devs[d]['state'].upper() == "OFFLINE"
+        ])
+        if inactive_devs:
+            df_i_dev = pd.DataFrame([{
+                "Device": d,
+                "Statut en Prod": "❌ Supprimé du Spooler" if d not in prod_devs else "💤 OFFLINE (Inactif)"
+            } for d in inactive_devs])
+            st.dataframe(df_i_dev, use_container_width=True)
+        else:
+            st.success("Tous les devices configurés sont actifs et en ligne.")
+            
+    with tab_print_inactive:
+        # Un processus PRINT est inactif s'il n'apparaît pas dans le statut de prod
+        inactive_prints = sorted([p for p in conf_prints if p not in prod_prints])
+        if inactive_prints:
+            df_i_print = pd.DataFrame([{
+                "Processus PRINT": p, "Statut": "❌ Non démarré / Absent du Spooler"
+            } for p in inactive_prints])
+            st.dataframe(df_i_print, use_container_width=True)
+        else:
+            st.success("Tous les processus d'impression configurés tournent en prod.")
+            
+    with tab_loc_inactive:
+        # Une location est inactive/absente si elle n'est pas dans les LOC de prod OR si elle pointe vers un device absent/poubelle
+        inactive_locs = sorted([
+            l for l in conf_locs 
+            if l not in prod_locs or prod_locs[l] == "$NULL.#POUB" or prod_locs[l] not in prod_devs
+        ])
+        if inactive_locs:
+            df_i_loc = pd.DataFrame([{
+                "Location": l,
+                "Cible théorique (Conf)": conf_locs[l],
+                "Raison de l'inactivité": (
+                    "❌ Supprimée de la Prod" if l not in prod_locs 
+                    else "🗑️ Redirigée vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB"
+                    else f"⚠️ Pointe vers un device inexistant ({prod_locs[l]})"
+                )
+            } for l in inactive_locs])
+            st.dataframe(df_i_loc, use_container_width=True)
+        else:
+            st.success("Toutes les locations configurées sont saines et actives.")
