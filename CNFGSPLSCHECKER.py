@@ -7,9 +7,8 @@ import re
 # ==========================================
 
 def clean_line(line):
-    """Supprime les résidus de logs de transfert comme et les backslashs génants"""
-    line = re.sub(r'\\', '', line)
-    return line.strip()
+    """Supprime les résidus de logs de transfert comme """
+    return re.sub(r'\', '', line).strip()
 
 def parse_spoolcom_log(file_content):
     """Parse un log global SPOOLCOM actif (DEV, PRINT, LOC)"""
@@ -107,7 +106,7 @@ def parse_cnfgspls(file_content):
     return conf_devs, conf_prints, conf_locs
 
 # ==========================================
-# 3. INTERFACE DE L'APPLICATION STREAMLIT
+# 3. INTERFACE DE L'APPLICATION STREAMLIT (AFFICHAGE EN LISTE)
 # ==========================================
 
 st.set_page_config(page_title="Tandem Spooler Auditor", layout="wide")
@@ -128,164 +127,91 @@ if spool_file and conf_file:
     prod_devs, prod_prints, prod_locs = parse_spoolcom_log(spool_content)
     conf_devs, conf_prints, conf_locs = parse_cnfgspls(conf_content)
     
-    st.success("Analyse croisée effectuée !")
+    st.success("Analyse croisée effectuée ! Les résultats sont listés ci-dessous.")
     
-    # -------------------------------------------------------------------------
-    # PARTIE A : EXISTANTS ABSENTS DE LA CONFIGURATION (À RAJOUTER)
-    # -------------------------------------------------------------------------
-    st.subheader("⚠️ Écart 1 : Éléments EXISTANTS en Prod mais ABSENTS du CNFGSPLS")
+    # =========================================================================
+    # BLOC 1 : LES ELEMENTS EXISTANTS MAIS ABSENTS DE LA CONF (A RAJOUTER)
+    # =========================================================================
+    st.markdown("## ⚠️ PARTIE 1 : Éléments EXISTANTS en Prod mais ABSENTS du CNFGSPLS")
+    st.caption("Ces éléments tournent actuellement mais seront perdus au prochain redémarrage propre du spooler.")
     
-    tab_dev_missing, tab_print_missing, tab_loc_missing = st.tabs([
-        "🛒 DEV Existants Absent de Conf", 
-        "⚙️ PRINT Existants Absent de Conf", 
-        "📍 LOC Existantes Absent de Conf"
-    ])
-    
-    with tab_dev_missing:
-        missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
-        if missing_devs:
-            df_m_dev = pd.DataFrame([{
-                "Device": d, "Processus": prod_devs[d]['proc'], "État Actuel": prod_devs[d]['state']
-            } for d in missing_devs])
-            st.dataframe(df_m_dev, use_container_width=True)
-        else:
-            st.success("Aucun périphérique existant n'est absent de la conf.")
-            
-    with tab_print_missing:
-        missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
-        if missing_prints:
-            df_m_print = pd.DataFrame([{
-                "Processus PRINT": p, "État": prod_prints[p]['state'], "PRI": prod_prints[p]['pri'], "CPU/Backup": prod_prints[p]['cpu_backup']
-            } for p in missing_prints])
-            st.dataframe(df_m_print, use_container_width=True)
-        else:
-            st.success("Aucun processus d'impression existant n'est absent de la conf.")
-            
-    with tab_loc_missing:
-        missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
-        if missing_locs:
-            df_m_loc = pd.DataFrame([{
-                "Location": l, "Cible Spooler (Prod)": prod_locs[l]
-            } for l in missing_locs])
-            st.dataframe(df_m_loc, use_container_width=True)
-        else:
-            st.success("Aucune location existante n'est absente de la conf.")
-
-    st.markdown("---")
-
-    # -------------------------------------------------------------------------
-    # PARTIE B : DÉCLARÉS DANS LA CONFIGURATION MAIS INACTIFS/ABSENTS EN PROD
-    # -------------------------------------------------------------------------
-    st.subheader("🧹 Écart 2 : Éléments CONFIGURÉS mais ABSENTS ou INACTIFS en Prod (À démonter)")
-    
-    tab_dev_inactive, tab_print_inactive, tab_loc_inactive = st.tabs([
-        "💤 DEV Inactifs / Absents", 
-        "💤 PRINT Inactifs / Absents", 
-        "💤 LOC Inactives / Absentes"
-    ])
-    
-    with tab_dev_inactive:
-        # Un DEV est considéré inactif s'il n'est plus dans le spooler OU s'il est OFFLINE
-        inactive_devs = sorted([
-            d for d in conf_devs 
-            if d not in prod_devs or prod_devs[d]['state'].upper() == "OFFLINE"
-        ])
-        if inactive_devs:
-            df_i_dev = pd.DataFrame([{
-                "Device": d,
-                "Statut en Prod": "❌ Supprimé du Spooler" if d not in prod_devs else "💤 OFFLINE (Inactif)"
-            } for d in inactive_devs])
-            st.dataframe(df_i_dev, use_container_width=True)
-        else:
-            st.success("Tous les devices configurés sont actifs et en ligne.")
-            
-    with tab_print_inactive:
-        # Un processus PRINT est inactif s'il n'apparaît pas dans le statut de prod
-        inactive_prints = sorted([p for p in conf_prints if p not in prod_prints])
-        if inactive_prints:
-            df_i_print = pd.DataFrame([{
-                "Processus PRINT": p, "Statut": "❌ Non démarré / Absent du Spooler"
-            } for p in inactive_prints])
-            st.dataframe(df_i_print, use_container_width=True)
-        else:
-            st.success("Tous les processus d'impression configurés tournent en prod.")
-            
-    with tab_loc_inactive:
-        # Une location est inactive/absente si elle n'est pas dans les LOC de prod OR si elle pointe vers un device absent/poubelle
-        inactive_locs = sorted([
-            l for l in conf_locs 
-            if l not in prod_locs or prod_locs[l] == "$NULL.#POUB" or prod_locs[l] not in prod_devs
-        ])
-        if inactive_locs:
-            df_i_loc = pd.DataFrame([{
-                "Location": l,
-                "Cible théorique (Conf)": conf_locs[l],
-                "Raison de l'inactivité": (
-                    "❌ Supprimée de la Prod" if l not in prod_locs 
-                    else "🗑️ Redirigée vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB"
-                    else f"⚠️ Pointe vers un device inexistant ({prod_locs[l]})"
-                )
-            } for l in inactive_locs])
-            st.dataframe(df_i_loc, use_container_width=True)
-        else:
-            st.success("Toutes les locations configurées sont saines et actives.")
-            
-# ==========================================
-    # 4. GÉNÉRATION DU RAPPORT EXCEL UNIQUE
-    # ==========================================
-    st.markdown("---")
-    st.subheader("📥 Téléchargement du Rapport Global")
-    
-    import io
-
-    # On crée un dictionnaire avec tous nos DataFrames pour automatiser la création des onglets
-    export_data = {}
-    
+    # 1. DEV Manquants
+    st.markdown("### 🖨️ 1. DEV (Imprimantes) existants non déclarés")
+    missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
     if missing_devs:
-        export_data["DEV Manquants (A Rajouter)"] = pd.DataFrame([{
+        df_m_dev = pd.DataFrame([{
             "Device": d, "Processus": prod_devs[d]['proc'], "État Actuel": prod_devs[d]['state']
         } for d in missing_devs])
+        st.dataframe(df_m_dev, width="stretch")
+    else:
+        st.success("Aucun périphérique existant n'est absent de la conf.")
         
+    # 2. PRINT Manquants
+    st.markdown("### ⚙️ 2. PRINT (Processus d'impression) existants non déclarés")
+    missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
     if missing_prints:
-        export_data["PRINT Manquants (A Rajouter)"] = pd.DataFrame([{
+        df_m_print = pd.DataFrame([{
             "Processus PRINT": p, "État": prod_prints[p]['state'], "PRI": prod_prints[p]['pri'], "CPU/Backup": prod_prints[p]['cpu_backup']
         } for p in missing_prints])
+        st.dataframe(df_m_print, width="stretch")
+    else:
+        st.success("Aucun processus d'impression existant n'est absent de la conf.")
         
+    # 3. LOC Manquantes
+    st.markdown("### 📍 3. LOC (Locations) existantes non déclarées")
+    missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
     if missing_locs:
-        export_data["LOC Manquantes (A Rajouter)"] = pd.DataFrame([{
+        df_m_loc = pd.DataFrame([{
             "Location": l, "Cible Spooler (Prod)": prod_locs[l]
         } for l in missing_locs])
-        
+        st.dataframe(df_m_loc, width="stretch")
+    else:
+        st.success("Aucune location existante n'est absente de la conf.")
+
+    st.markdown("<br><hr><br>", unsafe_allow_html=True)
+
+    # =========================================================================
+    # BLOC 2 : LES ELEMENTS DE LA CONF QUI SONT INACTIFS OU ABSENTS (A DEMONTER)
+    # =========================================================================
+    st.markdown("## 🧹 PARTIE 2 : Éléments CONFIGURÉS mais ABSENTS ou INACTIFS en Prod")
+    st.caption("Ces éléments sont déclarés dans le fichier mais n'existent plus ou sont inutilisés sur la machine.")
+    
+    # 4. DEV Inactifs
+    st.markdown("### 💤 4. DEV (Imprimantes) configurés mais inactifs ou supprimés")
+    inactive_devs = sorted([d for d in conf_devs if d not in prod_devs or prod_devs[d]['state'].upper() == "OFFLINE"])
     if inactive_devs:
-        export_data["DEV Inactifs (A Demonter)"] = pd.DataFrame([{
-            "Device": d, "Statut en Prod": "❌ Supprimé du Spooler" if d not in prod_devs else "💤 OFFLINE (Inactif)"
+        df_i_dev = pd.DataFrame([{
+            "Device": d,
+            "Statut en Prod": "❌ Supprimé du Spooler" if d not in prod_devs else "💤 OFFLINE (Inactif)"
         } for d in inactive_devs])
+        st.dataframe(df_i_dev, width="stretch")
+    else:
+        st.success("Tous les devices configurés sont actifs et en ligne.")
         
+    # 5. PRINT Inactifs
+    st.markdown("### 💤 5. PRINT (Processus) configurés mais non démarrés")
+    inactive_prints = sorted([p for p in conf_prints if p not in prod_prints])
     if inactive_prints:
-        export_data["PRINT Inactifs (A Demonter)"] = pd.DataFrame([{
+        df_i_print = pd.DataFrame([{
             "Processus PRINT": p, "Statut": "❌ Non démarré / Absent du Spooler"
         } for p in inactive_prints])
-        
-    if inactive_locs:
-        export_data["LOC Inactives (A Demonter)"] = pd.DataFrame([{
-            "Location": l, "Cible théorique (Conf)": conf_locs[l], 
-            "Raison de l'inactivité": ("❌ Supprimée de la Prod" if l not in prod_locs else "🗑️ Redirigée vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB" else f"⚠️ Pointe vers un device inexistant ({prod_locs[l]})")
-        } for l in inactive_locs])
-
-    # Si on a de la data à exporter, on génère le fichier Excel en mémoire
-    if export_data:
-        buffer = io.BytesIO()
-        # openpyxl est requis par pandas pour écrire du .xlsx, assure-toi qu'il est dans ton requirements.txt
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            for sheet_name, df in export_data.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-        
-        st.download_button(
-            label="📊 Télécharger le Rapport d'Audit Complet (.xlsx)",
-            data=buffer.getvalue(),
-            file_name=f"Audit_Spooler_{spool_file.name.split('.')[0]}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        st.dataframe(df_i_print, width="stretch")
     else:
-        st.info("✅ Rien à exporter ! Les fichiers de prod et de conf sont parfaitement identiques.")
+        st.success("Tous les processus d'impression configurés tournent en prod.")
+        
+    # 6. LOC Inactives
+    st.markdown("### 🗑️ 6. LOC (Locations) configurées mais inactives ou envoyées à la poubelle")
+    inactive_locs = sorted([l for l in conf_locs if l not in prod_locs or prod_locs[l] == "$NULL.#POUB" or prod_locs[l] not in prod_devs])
+    if inactive_locs:
+        df_i_loc = pd.DataFrame([{
+            "Location": l,
+            "Cible théorique (Conf)": conf_locs[l],
+            "Raison de l'inactivité": (
+                "❌ Supprimée de la Prod" if l not in prod_locs 
+                else "🗑️ Redirigée vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB"
+                else f"⚠️ Pointe vers un device inexistant ({prod_locs[l]})"
+            )
+        } for l in inactive_locs])
+        st.dataframe(df_i_loc, width="stretch")
+    else:
+        st.success("Toutes les locations configurées sont saines et actives.")
