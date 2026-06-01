@@ -7,7 +7,7 @@ import re
 # ==========================================
 
 def clean_line(line):
-    return re.sub(r'\', '', line).strip()
+    return re.sub(r'\\', '', line).strip()
 
 def parse_spoolcom_log(file_content):
     devs = {}
