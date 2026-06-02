@@ -7,9 +7,19 @@ import re
 # ==========================================
 
 def clean_line(line):
-    # Supprime les marqueurs de transfert spécifiques 
     line = re.sub(r'\\', '', line)
     return line.strip()
+
+def remove_timestamps(line):
+    """
+    Supprime les dates et heures courantes des logs Tandem (ex: 1JUN26, 27MAY26, 14:18, 23:24:15)
+    """
+    # Supprime les dates du type 1JUN26, 27MAY26, 30MAR06, etc.
+    line = re.sub(r'\b\d{1,2}[A-Z]{3}\d{2,4}\b', '', line, flags=re.IGNORECASE)
+    # Supprime les heures du type 14:18 ou 23:24:15
+    line = re.sub(r'\b\d{1,2}:\d{2}(:\d{2})?\b', '', line)
+    # Nettoie les espaces multiples résiduels
+    return re.sub(r'\s+', ' ', line).strip()
 
 # ==========================================
 # 2. FONCTIONS DE PARSING (SPOOLER)
@@ -110,11 +120,10 @@ def parse_cnfgspls(file_content):
 
 st.set_page_config(page_title="Tandem Configuration Auditor", layout="wide")
 
-# Menu de sélection dans la barre latérale
 st.sidebar.title("Menu d'Audit")
 mode_analyse = st.sidebar.selectbox(
     "Choisir le type d'analyse :",
-    ["Audit Spooler (SPOOLCOM)", "Comparateur Générique (Logins / Profils / Conf)"]
+    ["Audit Spooler (SPOOLCOM)", "Audit Générique (Logins / Profils / Conf)"]
 )
 
 if mode_analyse == "Audit Spooler (SPOOLCOM)":
@@ -136,8 +145,12 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         
         st.info("Analyse croisee effectuee. Resultats complets affiches a la suite pour copier-coller.")
         
+        tacl_add_blocks = ""
+        
+        # --- PARTIE 1 : AJOUTS ---
         st.markdown("# PARTIE 1 : Elements EXISTANTS en Prod mais ABSENTS du CNFGSPLS")
         
+        # 1. DEV Manquants
         st.markdown("## 1. DEV (Imprimantes) existants non declares")
         missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
         if missing_devs:
@@ -145,9 +158,19 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
                 "Device": d, "Processus": prod_devs[d]['proc'], "Etat Actuel": prod_devs[d]['state']
             } for d in missing_devs])
             st.table(df_m_dev)
+            
+            tacl_add_blocks += "== ==========================================\n"
+            tacl_add_blocks += "== LIGNES DEV A RAJOUTER AU FICHIER CNFGSPLS\n"
+            tacl_add_blocks += "== ==========================================\n"
+            for d in missing_devs:
+                proc = prod_devs[d]['proc']
+                tacl_add_blocks += f"DEV {d} ,PROCESS {proc} ,SPEED 100,WIDTH -1 ,RESTART 120,HEADER OFF,FIFO ON\n"
+                tacl_add_blocks += f"DEV {d} ,PARM 1024,RETRY 10 ,TIMEOUT 360 ,LUEOLVALUE CRLF\n"
+                tacl_add_blocks += f"DEV {d} ,DEVRESET ON ,STARTFF OFF,ENDFF ON ,EXCLUSIVE OFF,DEVTYPE\n\n"
         else:
             st.text("Aucun peripherique existant n'est absent de la conf.")
             
+        # 2. PRINT Manquants
         st.markdown("## 2. PRINT (Processus d'impression) existants non declares")
         missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
         if missing_prints:
@@ -155,9 +178,19 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
                 "Processus PRINT": p, "Etat": prod_prints[p]['state'], "PRI": prod_prints[p]['pri'], "CPU/Backup": prod_prints[p]['cpu_backup']
             } for p in missing_prints])
             st.table(df_m_print)
+            
+            tacl_add_blocks += "== ==========================================\n"
+            tacl_add_blocks += "== LIGNES PRINT A RAJOUTER AU FICHIER CNFGSPLS\n"
+            tacl_add_blocks += "== ==========================================\n"
+            for p in missing_prints:
+                pri = prod_prints[p]['pri']
+                tacl_add_blocks += f"PRINT {p}, FILE $SYSTEM.SYSTEM.FASTPTCP\n"
+                tacl_add_blocks += f"PRINT {p}, PRI {pri}, BACKUP 1\n"
+                tacl_add_blocks += f"PRINT {p}, CPU 2\n\n"
         else:
             st.text("Aucun processus d'impression existant n'est absent de la conf.")
             
+        # 3. LOC Manquantes
         st.markdown("## 3. LOC (Locations) existantes non declarees")
         missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
         if missing_locs:
@@ -165,24 +198,37 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
                 "Location": l, "Cible Spooler (Prod)": prod_locs[l]
             } for l in missing_locs])
             st.table(df_m_loc)
+            
+            tacl_add_blocks += "== ==========================================\n"
+            tacl_add_blocks += "== LIGNES LOC A RAJOUTER AU FICHIER CNFGSPLS\n"
+            tacl_add_blocks += "== ==========================================\n"
+            for l in missing_locs:
+                tacl_add_blocks += f"LOC {l:<20} ,DEV    {prod_locs[l]}\n"
+            tacl_add_blocks += "\n"
         else:
             st.text("Aucune location existante n'est absente de la conf.")
 
+        if tacl_add_blocks:
+            st.markdown("### Lignes TACL à copier et rajouter dans ton CNFGSPLS :")
+            st.code(tacl_add_blocks, language="tacl")
+
         st.markdown("<br><hr><br>", unsafe_allow_html=True)
 
+        # --- PARTIE 2 : DIAGNOSTIC ---
         st.markdown("# PARTIE 2 : Elements CONFIGURES mais ABSENTS ou INACTIFS en Prod")
         
+        # 4. DEV Inactifs
         st.markdown("## 4. DEV (Imprimantes) configures mais inactifs ou supprimes")
         inactive_devs = sorted([d for d in conf_devs if d not in prod_devs or prod_devs[d]['state'].upper() == "OFFLINE"])
         if inactive_devs:
             df_i_dev = pd.DataFrame([{
-                "Device": d,
-                "Statut en Prod": "Supprime du Spooler" if d not in prod_devs else "OFFLINE (Inactif)"
+                "Device": d, "Statut en Prod": "Supprime du Spooler" if d not in prod_devs else "OFFLINE (Inactif)"
             } for d in inactive_devs])
             st.table(df_i_dev)
         else:
             st.text("Tous les devices configures sont actifs et en ligne.")
             
+        # 5. PRINT Inactifs
         st.markdown("## 5. PRINT (Processus) configures mais non demarres")
         inactive_prints = sorted([p for p in conf_prints if p not in prod_prints])
         if inactive_prints:
@@ -193,17 +239,13 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Tous les processus d'impression configures tournent en prod.")
             
+        # 6. LOC Inactives
         st.markdown("## 6. LOC (Locations) configurees mais inactives ou envoyees a la poubelle")
         inactive_locs = sorted([l for l in conf_locs if l not in prod_locs or prod_locs[l] == "$NULL.#POUB" or prod_locs[l] not in prod_devs])
         if inactive_locs:
             df_i_loc = pd.DataFrame([{
-                "Location": l,
-                "Cible theorique (Conf)": conf_locs[l],
-                "Raison de l'inactivite": (
-                    "Supprimee de la Prod" if l not in prod_locs 
-                    else "Redirigee vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB"
-                    else f"Pointe vers un device inexistant ({prod_locs[l]})"
-                )
+                "Location": l, "Cible théorique (Conf)": conf_locs[l],
+                "Raison de l'inactivite": ("Supprimee de la Prod" if l not in prod_locs else "Redirigee vers la Poubelle ($NULL)" if prod_locs[l] == "$NULL.#POUB" else f"Pointe vers un device inexistant ({prod_locs[l]})")
             } for l in inactive_locs])
             st.table(df_i_loc)
         else:
@@ -211,7 +253,7 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
 
 else:
     st.title("Audit Générique de Fichiers NonStop")
-    st.markdown("Compare deux listes brutes nettoyées de leurs résidus OutsideView (ex: Logins, configurations, etc.).")
+    st.markdown("Compare deux listes brutes nettoyées des résidus OutsideView et **des variables temporelles (dates/heures)**.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -223,11 +265,24 @@ else:
         content_a = file_a.read().decode("utf-8").splitlines()
         content_b = file_b.read().decode("utf-8").splitlines()
         
-        # Nettoyage et élimination des doublons
-        set_a = set(clean_line(line) for line in content_a if clean_line(line) and not line.strip().startswith("="))
-        set_b = set(clean_line(line) for line in content_b if clean_line(line) and not line.strip().startswith("="))
+        # Nettoyage complet (OutsideView + Suppression Dates/Heures)
+        set_a = set()
+        for line in content_a:
+            clean = clean_line(line)
+            if clean and not clean.startswith("="):
+                clean_no_time = remove_timestamps(clean)
+                if clean_no_time: # On n'ajoute que si la ligne n'est pas devenue vide
+                    set_a.add(clean_no_time)
+                    
+        set_b = set()
+        for line in content_b:
+            clean = clean_line(line)
+            if clean and not clean.startswith("="):
+                clean_no_time = remove_timestamps(clean)
+                if clean_no_time:
+                    set_b.add(clean_no_time)
         
-        st.info("Analyse comparative brute effectuée.")
+        st.info("Analyse comparative brute (hors horodatage) effectuée.")
         
         st.markdown("# Éléments présents dans le fichier A mais absents du fichier B")
         diff_a_b = sorted(list(set_a - set_b))
