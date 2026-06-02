@@ -8,7 +8,7 @@ import re
 
 def clean_line(line):
     # Supprime les marqueurs de transfert spécifiques 
-    line = re.sub(r'\', '', line)
+    line = re.sub(r'\\', '', line)
     return line.strip()
 
 # ==========================================
