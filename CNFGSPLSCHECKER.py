@@ -114,7 +114,7 @@ st.set_page_config(page_title="Tandem Configuration Auditor", layout="wide")
 st.sidebar.title("Menu d'Audit")
 mode_analyse = st.sidebar.selectbox(
     "Choisir le type d'analyse :",
-    ["Audit Spooler (SPOOLCOM)", "Audit Générique (Logins / Profils / Conf)"]
+    ["Audit Spooler (SPOOLCOM)", "Comparateur Générique (Logins / Profils / Conf)"]
 )
 
 if mode_analyse == "Audit Spooler (SPOOLCOM)":
