@@ -10,17 +10,6 @@ def clean_line(line):
     line = re.sub(r'\\', '', line)
     return line.strip()
 
-def remove_timestamps(line):
-    """
-    Supprime les dates et heures courantes des logs Tandem (ex: 1JUN26, 27MAY26, 14:18, 23:24:15)
-    """
-    # Supprime les dates du type 1JUN26, 27MAY26, 30MAR06, etc.
-    line = re.sub(r'\b\d{1,2}[A-Z]{3}\d{2,4}\b', '', line, flags=re.IGNORECASE)
-    # Supprime les heures du type 14:18 ou 23:24:15
-    line = re.sub(r'\b\d{1,2}:\d{2}(:\d{2})?\b', '', line)
-    # Nettoie les espaces multiples résiduels
-    return re.sub(r'\s+', ' ', line).strip()
-
 # ==========================================
 # 2. FONCTIONS DE PARSING (SPOOLER)
 # ==========================================
@@ -52,7 +41,6 @@ def parse_spoolcom_log(file_content):
         if not cleaned or cleaned.startswith("=") or cleaned.startswith(")") or "LOG START" in cleaned:
             continue
             
-        # Section DEV
         if current_section == "DEV" and cleaned.startswith("$"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 2:
@@ -66,7 +54,6 @@ def parse_spoolcom_log(file_content):
                     proc = parts[-1] if parts[-1].startswith("$") else "UNKNOWN"
                 devs[dev_name] = {"state": state, "proc": proc}
                 
-        # Section PRINT
         elif current_section == "PRINT" and cleaned.startswith("$"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 4:
@@ -76,7 +63,6 @@ def parse_spoolcom_log(file_content):
                 pri = parts[-1]
                 prints[print_name] = {"state": state, "cpu_backup": cpu_backup, "pri": pri}
                 
-        # Section LOC
         elif current_section == "LOC" and cleaned.startswith("#"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 2:
@@ -115,7 +101,38 @@ def parse_cnfgspls(file_content):
     return conf_devs, conf_prints, conf_locs
 
 # ==========================================
-# 3. INTERFACE DE L'APPLICATION STREAMLIT
+# 3. FONCTIONS DE PARSING (LOGONS SECOURITE)
+# ==========================================
+
+def parse_user_log(file_content):
+    """
+    Parse les logs de commande 'info user *.*'
+    Retourne un dictionnaire { 'GROUPE.USER': 'STATUS' }
+    """
+    users = {}
+    lines = file_content.splitlines()
+    
+    for line in lines:
+        cleaned = clean_line(line)
+        # On ignore les entêtes, bannières et lignes vides
+        if not cleaned or "GROUP.USER" in cleaned or "USER-ID" in cleaned or cleaned.startswith("=") or cleaned.startswith("."):
+            continue
+        if "INFO USER" in cleaned.upper() or "OV LOG" in cleaned.upper():
+            continue
+            
+        # Découpage de la ligne de données (ex: ETUDE.AVAL 21,4 255,255 1JUN26, 14:18 28MAY26, 0:02 THAWED)
+        parts = re.split(r'\s+', cleaned)
+        
+        # Un logon valide comporte au moins le nom (index 0) et le statut (dernier index)
+        if len(parts) >= 5 and "." in parts[0]:
+            username = parts[0].upper()
+            status = parts[-1].upper() # THAWED, FROZEN, etc.
+            users[username] = status
+            
+    return users
+
+# ==========================================
+# 4. INTERFACE DE L'APPLICATION STREAMLIT
 # ==========================================
 
 st.set_page_config(page_title="Tandem Configuration Auditor", layout="wide")
@@ -123,9 +140,10 @@ st.set_page_config(page_title="Tandem Configuration Auditor", layout="wide")
 st.sidebar.title("Menu d'Audit")
 mode_analyse = st.sidebar.selectbox(
     "Choisir le type d'analyse :",
-    ["Audit Spooler (SPOOLCOM)", "Audit Générique (Logins / Profils / Conf)"]
+    ["Audit Spooler (SPOOLCOM)", "Audit Logons (Sécurité)"]
 )
 
+# --- MODE 1 : AUDIT SPOOLER ---
 if mode_analyse == "Audit Spooler (SPOOLCOM)":
     st.title("Rapport d'Audit Spooler HP NonStop")
     st.markdown("Analyse des ecarts et mouvements de configuration (Prod vs Fichier de Conf).")
@@ -147,10 +165,8 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         
         tacl_add_blocks = ""
         
-        # --- PARTIE 1 : AJOUTS ---
         st.markdown("# PARTIE 1 : Elements EXISTANTS en Prod mais ABSENTS du CNFGSPLS")
         
-        # 1. DEV Manquants
         st.markdown("## 1. DEV (Imprimantes) existants non declares")
         missing_devs = sorted([d for d in prod_devs if d not in conf_devs])
         if missing_devs:
@@ -170,7 +186,6 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Aucun peripherique existant n'est absent de la conf.")
             
-        # 2. PRINT Manquants
         st.markdown("## 2. PRINT (Processus d'impression) existants non declares")
         missing_prints = sorted([p for p in prod_prints if p not in conf_prints])
         if missing_prints:
@@ -190,7 +205,6 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Aucun processus d'impression existant n'est absent de la conf.")
             
-        # 3. LOC Manquantes
         st.markdown("## 3. LOC (Locations) existantes non declarees")
         missing_locs = sorted([l for l in prod_locs if l not in conf_locs])
         if missing_locs:
@@ -214,10 +228,8 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
 
         st.markdown("<br><hr><br>", unsafe_allow_html=True)
 
-        # --- PARTIE 2 : DIAGNOSTIC ---
         st.markdown("# PARTIE 2 : Elements CONFIGURES mais ABSENTS ou INACTIFS en Prod")
         
-        # 4. DEV Inactifs
         st.markdown("## 4. DEV (Imprimantes) configures mais inactifs ou supprimes")
         inactive_devs = sorted([d for d in conf_devs if d not in prod_devs or prod_devs[d]['state'].upper() == "OFFLINE"])
         if inactive_devs:
@@ -228,7 +240,6 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Tous les devices configures sont actifs et en ligne.")
             
-        # 5. PRINT Inactifs
         st.markdown("## 5. PRINT (Processus) configures mais non demarres")
         inactive_prints = sorted([p for p in conf_prints if p not in prod_prints])
         if inactive_prints:
@@ -239,7 +250,6 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Tous les processus d'impression configures tournent en prod.")
             
-        # 6. LOC Inactives
         st.markdown("## 6. LOC (Locations) configurees mais inactives ou envoyees a la poubelle")
         inactive_locs = sorted([l for l in conf_locs if l not in prod_locs or prod_locs[l] == "$NULL.#POUB" or prod_locs[l] not in prod_devs])
         if inactive_locs:
@@ -251,51 +261,64 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
         else:
             st.text("Toutes les locations configurees sont saines et actives.")
 
+# --- MODE 2 : AUDIT LOGONS ---
 else:
-    st.title("Audit Générique de Fichiers NonStop")
-    st.markdown("Compare deux listes brutes nettoyées des résidus OutsideView et **des variables temporelles (dates/heures)**.")
+    st.title("Rapport d'Audit des Logons / Comtes Sécurité")
+    st.markdown("Vérification de la cohérence et de la synchronisation des comptes entre deux environnements NonStop.")
     
     col1, col2 = st.columns(2)
     with col1:
-        file_a = st.file_uploader("Fichier A", type=["log", "txt"])
+        file_env1 = st.file_uploader("Environnement Référence (ex: LEIA ou ATLAS)", type=["log", "txt"])
     with col2:
-        file_b = st.file_uploader("Fichier B", type=["log", "txt"])
+        file_env2 = st.file_uploader("Environnement Cible (ex: ISIS ou PADME)", type=["log", "txt"])
         
-    if file_a and file_b:
-        content_a = file_a.read().decode("utf-8").splitlines()
-        content_b = file_b.read().decode("utf-8").splitlines()
+    if file_env1 and file_env2:
+        content_env1 = file_env1.read().decode("utf-8")
+        content_env2 = file_env2.read().decode("utf-8")
         
-        # Nettoyage complet (OutsideView + Suppression Dates/Heures)
-        set_a = set()
-        for line in content_a:
-            clean = clean_line(line)
-            if clean and not clean.startswith("="):
-                clean_no_time = remove_timestamps(clean)
-                if clean_no_time: # On n'ajoute que si la ligne n'est pas devenue vide
-                    set_a.add(clean_no_time)
-                    
-        set_b = set()
-        for line in content_b:
-            clean = clean_line(line)
-            if clean and not clean.startswith("="):
-                clean_no_time = remove_timestamps(clean)
-                if clean_no_time:
-                    set_b.add(clean_no_time)
+        users_env1 = parse_user_log(content_env1)
+        users_env2 = parse_user_log(content_env2)
         
-        st.info("Analyse comparative brute (hors horodatage) effectuée.")
+        st.info("Analyse croisée des logons effectuée. Résultats affichés ci-dessous.")
         
-        st.markdown("# Éléments présents dans le fichier A mais absents du fichier B")
-        diff_a_b = sorted(list(set_a - set_b))
-        if diff_a_b:
-            df_diff_ab = pd.DataFrame({"Élément": diff_a_b})
-            st.table(df_diff_ab)
+        # 1. Logons absents du deuxième environnement
+        st.markdown("# PARTIE 1 : Écarts de Présence des Logons")
+        
+        st.markdown("## 1. Logons présents dans Référence mais absents de Cible")
+        missing_in_env2 = sorted([u for u in users_env1 if u not in users_env2])
+        if missing_in_env2:
+            df_missing_env2 = pd.DataFrame([{
+                "Logon": u, "Statut sur Référence": users_env1[u]
+            } for u in missing_in_env2])
+            st.table(df_missing_env2)
         else:
-            st.text("Aucune différence.")
+            st.text("Aucun logon manquant dans l'environnement cible.")
             
-        st.markdown("# Éléments présents dans le fichier B mais absents du fichier A")
-        diff_b_a = sorted(list(set_b - set_a))
-        if diff_b_a:
-            df_diff_ba = pd.DataFrame({"Élément": diff_b_a})
-            st.table(df_diff_ba)
+        st.markdown("## 2. Logons présents dans Cible mais absents de Référence")
+        missing_in_env1 = sorted([u for u in users_env2 if u not in users_env1])
+        if missing_in_env1:
+            df_missing_env1 = pd.DataFrame([{
+                "Logon": u, "Statut sur Cible": users_env2[u]
+            } for u in missing_in_env1])
+            st.table(df_missing_env1)
         else:
-            st.text("Aucune différence.")
+            st.text("Aucun logon masqué ou supplémentaire dans l'environnement de référence.")
+            
+        st.markdown("<br><hr><br>", unsafe_allow_html=True)
+            
+        # 2. Différences de statut (ex: THAWED sur un environnement et FROZEN sur l'autre)
+        st.markdown("# PARTIE 2 : Incohérences de Statut Sécurité")
+        st.caption("Logons existants sur les deux machines mais n'ayant pas le même état (ex: débloqué d'un côté, bloqué de l'autre).")
+        
+        common_users = set(users_env1.keys()) & set(users_env2.keys())
+        status_mismatch = sorted([u for u in common_users if users_env1[u] != users_env2[u]])
+        
+        if status_mismatch:
+            df_mismatch = pd.DataFrame([{
+                "Logon": u,
+                "Statut sur Référence": users_env1[u],
+                "Statut sur Cible": users_env2[u]
+            } for u in status_mismatch])
+            st.table(df_mismatch)
+        else:
+            st.text("Tous les statuts de sécurité des logons communs sont parfaitement identiques.")
