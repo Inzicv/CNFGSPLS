@@ -340,7 +340,7 @@ elif mode_analyse == "Audit Logons (Sécurité)":
 # --- MODE 3 : COMPARATEUR CONFIGS (CNFGSPLS) ---
 else:
     st.title("Comparateur de Fichiers de Configuration")
-    st.markdown("Analyse des différences strictes de directives entre deux fichiers CNFGSPLS censés être identiques.")
+    st.markdown("Analyse des différences strictes entre deux fichiers de configuration")
     
     col1, col2 = st.columns(2)
     with col1:
