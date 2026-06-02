@@ -244,5 +244,3 @@ else:
             st.table(df_diff_ba)
         else:
             st.text("Aucune différence.")
-
-```
