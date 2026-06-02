@@ -156,22 +156,22 @@ st.sidebar.title("Menu d'Audit")
 mode_analyse = st.sidebar.selectbox(
     "Choisir le type d'analyse :",
     [
-        "Audit Spooler (SPOOLCOM)", 
-        "Audit Logons (Sécurité)", 
-        "Comparateur Fichiers Configuration (CNFGSPLS)"
+        "Audit Spooler", 
+        "Audit Logons", 
+        "Comparateur Fichiers Configuration"
     ]
 )
 
 # --- MODE 1 : AUDIT SPOOLER ---
 if mode_analyse == "Audit Spooler (SPOOLCOM)":
     st.title("Rapport d'Audit Spooler HP NonStop")
-    st.markdown("Analyse des ecarts et mouvements de configuration (Prod vs Fichier de Conf).")
+    st.markdown("Analyse des ecarts et mouvements de configuration (Existant vs Fichier de Conf).")
 
     col1, col2 = st.columns(2)
     with col1:
-        spool_file = st.file_uploader("1. Importer le log SPOOLCOM (Existant / Prod)", type=["log", "txt"])
+        spool_file = st.file_uploader("1. Importer le log existant", type=["log", "txt"])
     with col2:
-        conf_file = st.file_uploader("2. Importer le fichier CNFGSPLS (Theorique)", type=["log", "txt"])
+        conf_file = st.file_uploader("2. Importer le fichier CNFGSPLS", type=["log", "txt"])
 
     if spool_file and conf_file:
         spool_content = spool_file.read().decode("utf-8")
@@ -344,9 +344,9 @@ else:
     
     col1, col2 = st.columns(2)
     with col1:
-        cfg_file_a = st.file_uploader("Fichier CNFGSPLS Référence (A)", type=["log", "txt"])
+        cfg_file_a = st.file_uploader("Fichier config de Référence (A)", type=["log", "txt"])
     with col2:
-        cfg_file_b = st.file_uploader("Fichier CNFGSPLS Cible (B)", type=["log", "txt"])
+        cfg_file_b = st.file_uploader("Fichier config Cible (B)", type=["log", "txt"])
         
     if cfg_file_a and cfg_file_b:
         lines_a = cfg_file_a.read().decode("utf-8").splitlines()
