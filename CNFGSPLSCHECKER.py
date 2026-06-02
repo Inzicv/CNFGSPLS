@@ -10,6 +10,26 @@ def clean_line(line):
     line = re.sub(r'\\', '', line)
     return line.strip()
 
+def normalize_conf_line(line):
+    """
+    Nettoie et uniformise une ligne de configuration brute pour la comparaison.
+    Retourne la ligne en majuscules sans espaces multiples, ou None si c'est inutile.
+    """
+    cleaned = clean_line(line).upper()
+    # On ignore les commentaires, les bannières de copie et les invites de pagination OutsideView
+    if not cleaned or cleaned.startswith("COMMENT") or cleaned.startswith("=="):
+        return None
+    if "COPY CNFGSPLS" in cleaned or "PID:" in cleaned or "RECORDS TRANSFERRED" in cleaned:
+        return None
+    if "STOPPED:" in cleaned or "CPU TIME:" in cleaned or "NEXT?" in cleaned:
+        return None
+    if cleaned.startswith(")") or cleaned.startswith("("):
+        return None
+        
+    # On compresse les espaces multiples en un seul espace pour éviter les faux écarts
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned
+
 # ==========================================
 # 2. FONCTIONS DE PARSING (SPOOLER)
 # ==========================================
@@ -41,6 +61,7 @@ def parse_spoolcom_log(file_content):
         if not cleaned or cleaned.startswith("=") or cleaned.startswith(")") or "LOG START" in cleaned:
             continue
             
+        # Section DEV
         if current_section == "DEV" and cleaned.startswith("$"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 2:
@@ -54,6 +75,7 @@ def parse_spoolcom_log(file_content):
                     proc = parts[-1] if parts[-1].startswith("$") else "UNKNOWN"
                 devs[dev_name] = {"state": state, "proc": proc}
                 
+        # Section PRINT
         elif current_section == "PRINT" and cleaned.startswith("$"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 4:
@@ -63,6 +85,7 @@ def parse_spoolcom_log(file_content):
                 pri = parts[-1]
                 prints[print_name] = {"state": state, "cpu_backup": cpu_backup, "pri": pri}
                 
+        # Section LOC
         elif current_section == "LOC" and cleaned.startswith("#"):
             parts = re.split(r'\s+', cleaned)
             if len(parts) >= 2:
@@ -105,28 +128,20 @@ def parse_cnfgspls(file_content):
 # ==========================================
 
 def parse_user_log(file_content):
-    """
-    Parse les logs de commande 'info user *.*'
-    Retourne un dictionnaire { 'GROUPE.USER': 'STATUS' }
-    """
     users = {}
     lines = file_content.splitlines()
     
     for line in lines:
         cleaned = clean_line(line)
-        # On ignore les entêtes, bannières et lignes vides
         if not cleaned or "GROUP.USER" in cleaned or "USER-ID" in cleaned or cleaned.startswith("=") or cleaned.startswith("."):
             continue
         if "INFO USER" in cleaned.upper() or "OV LOG" in cleaned.upper():
             continue
             
-        # Découpage de la ligne de données (ex: ETUDE.AVAL 21,4 255,255 1JUN26, 14:18 28MAY26, 0:02 THAWED)
         parts = re.split(r'\s+', cleaned)
-        
-        # Un logon valide comporte au moins le nom (index 0) et le statut (dernier index)
         if len(parts) >= 5 and "." in parts[0]:
             username = parts[0].upper()
-            status = parts[-1].upper() # THAWED, FROZEN, etc.
+            status = parts[-1].upper()
             users[username] = status
             
     return users
@@ -140,7 +155,11 @@ st.set_page_config(page_title="Tandem Configuration Auditor", layout="wide")
 st.sidebar.title("Menu d'Audit")
 mode_analyse = st.sidebar.selectbox(
     "Choisir le type d'analyse :",
-    ["Audit Spooler (SPOOLCOM)", "Audit Logons (Sécurité)"]
+    [
+        "Audit Spooler (SPOOLCOM)", 
+        "Audit Logons (Sécurité)", 
+        "Comparateur Fichiers Configuration (CNFGSPLS)"
+    ]
 )
 
 # --- MODE 1 : AUDIT SPOOLER ---
@@ -262,8 +281,8 @@ if mode_analyse == "Audit Spooler (SPOOLCOM)":
             st.text("Toutes les locations configurees sont saines et actives.")
 
 # --- MODE 2 : AUDIT LOGONS ---
-else:
-    st.title("Rapport d'Audit des Logons / Comtes Sécurité")
+elif mode_analyse == "Audit Logons (Sécurité)":
+    st.title("Rapport d'Audit des Logons / Comptes Sécurité")
     st.markdown("Vérification de la cohérence et de la synchronisation des comptes entre deux environnements NonStop.")
     
     col1, col2 = st.columns(2)
@@ -281,7 +300,6 @@ else:
         
         st.info("Analyse croisée des logons effectuée. Résultats affichés ci-dessous.")
         
-        # 1. Logons absents du deuxième environnement
         st.markdown("# PARTIE 1 : Écarts de Présence des Logons")
         
         st.markdown("## 1. Logons présents dans Référence mais absents de Cible")
@@ -302,23 +320,65 @@ else:
             } for u in missing_in_env1])
             st.table(df_missing_env1)
         else:
-            st.text("Aucun logon masqué ou supplémentaire dans l'environnement de référence.")
+            st.text("Aucun logon supplémentaire dans l'environnement de référence.")
             
         st.markdown("<br><hr><br>", unsafe_allow_html=True)
             
-        # 2. Différences de statut (ex: THAWED sur un environnement et FROZEN sur l'autre)
         st.markdown("# PARTIE 2 : Incohérences de Statut Sécurité")
-        st.caption("Logons existants sur les deux machines mais n'ayant pas le même état (ex: débloqué d'un côté, bloqué de l'autre).")
         
         common_users = set(users_env1.keys()) & set(users_env2.keys())
         status_mismatch = sorted([u for u in common_users if users_env1[u] != users_env2[u]])
         
         if status_mismatch:
             df_mismatch = pd.DataFrame([{
-                "Logon": u,
-                "Statut sur Référence": users_env1[u],
-                "Statut sur Cible": users_env2[u]
+                "Logon": u, "Statut sur Référence": users_env1[u], "Statut sur Cible": users_env2[u]
             } for u in status_mismatch])
             st.table(df_mismatch)
         else:
             st.text("Tous les statuts de sécurité des logons communs sont parfaitement identiques.")
+
+# --- MODE 3 : COMPARATEUR CONFIGS (CNFGSPLS) ---
+else:
+    st.title("Comparateur de Fichiers de Configuration")
+    st.markdown("Analyse des différences strictes de directives entre deux fichiers CNFGSPLS censés être identiques.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        cfg_file_a = st.file_uploader("Fichier CNFGSPLS Référence (A)", type=["log", "txt"])
+    with col2:
+        cfg_file_b = st.file_uploader("Fichier CNFGSPLS Cible (B)", type=["log", "txt"])
+        
+    if cfg_file_a and cfg_file_b:
+        lines_a = cfg_file_a.read().decode("utf-8").splitlines()
+        lines_b = cfg_file_b.read().decode("utf-8").splitlines()
+        
+        # Extraction et normalisation des directives utiles
+        set_directives_a = set()
+        for line in lines_a:
+            normalized = normalize_conf_line(line)
+            if normalized:
+                set_directives_a.add(normalized)
+                
+        set_directives_b = set()
+        for line in lines_b:
+            normalized = normalize_conf_line(line)
+            if normalized:
+                set_directives_b.add(normalized)
+                
+        st.info("Comparaison des règles de configuration effectuée (hors commentaires et bannières).")
+        
+        st.markdown("# PARTIE 1 : Directives présentes dans A mais manquantes dans B")
+        diff_a_minus_b = sorted(list(set_directives_a - set_directives_b))
+        if diff_a_minus_b:
+            df_diff_ab = pd.DataFrame({"Directives manquantes dans B": diff_a_minus_b})
+            st.table(df_diff_ab)
+        else:
+            st.text("Aucune règle de référence manquante dans le fichier cible B.")
+            
+        st.markdown("# PARTIE 2 : Directives présentes dans B mais manquantes dans A")
+        diff_b_minus_a = sorted(list(set_directives_b - set_directives_a))
+        if diff_b_minus_a:
+            df_diff_ba = pd.DataFrame({"Directives supplémentaires dans B": diff_b_minus_a})
+            st.table(df_diff_ba)
+        else:
+            st.text("Aucune directive additionnelle détectée dans le fichier cible B.")
